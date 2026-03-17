@@ -19,7 +19,9 @@ global SWL_ShowUI
 global swl_StopTimer
 
 struct SWL_VertexLockData (
-    weightsByBoneID -- #( #(boneID, weight), ... ) per vertex index (1-based)
+    weightsByBoneID, -- #( #(boneID, weight), ... ) per vertex index (1-based)
+    lockedSumByVertex,
+    affectedVerts -- bitarray: 仅包含被锁骨骼影响的顶点
 )
 
 struct SWL_StateStruct (
@@ -65,6 +67,8 @@ fn swl_GetCurrentSelectedBoneIDs skinMod = (
 fn swl_CreateLockData skinMod boneIDs = (
     local vertCount = skinOps.GetNumberVertices skinMod
     local arr = for v = 1 to vertCount collect #()
+    local lockedSums = for v = 1 to vertCount collect 0.0
+    local affected = bitArray vertCount
 
     for v = 1 to vertCount do (
         local wc = skinOps.GetVertexWeightCount skinMod v
@@ -73,11 +77,13 @@ fn swl_CreateLockData skinMod boneIDs = (
             if (findItem boneIDs bID) > 0 do (
                 local wt = skinOps.GetVertexWeight skinMod v w
                 append arr[v] #(bID, wt)
+                lockedSums[v] += wt
+                affected[v] = true
             )
         )
     )
 
-    SWL_VertexLockData weightsByBoneID:arr
+    SWL_VertexLockData weightsByBoneID:arr lockedSumByVertex:lockedSums affectedVerts:affected
 )
 
 fn swl_EnforceLocks skinMod lockData vertsToProcess:undefined = (
@@ -85,12 +91,15 @@ fn swl_EnforceLocks skinMod lockData vertsToProcess:undefined = (
 
     local vertCount = skinOps.GetNumberVertices skinMod
     local eps = 0.0001
+    local vertsMask = undefined
 
-    local processAll = (vertsToProcess == undefined)
+    if vertsToProcess == undefined then (
+        vertsMask = lockData.affectedVerts
+    ) else (
+        vertsMask = vertsToProcess * lockData.affectedVerts
+    )
 
-    for v = 1 to vertCount do (
-        if (not processAll) and (vertsToProcess[v] != true) do continue
-
+    for v in vertsMask do (
         local lockedPairs = lockData.weightsByBoneID[v]
         if lockedPairs.count == 0 do continue
 
@@ -100,10 +109,9 @@ fn swl_EnforceLocks skinMod lockData vertsToProcess:undefined = (
             append curPairs #(skinOps.GetVertexWeightBoneID skinMod v w, skinOps.GetVertexWeight skinMod v w)
         )
 
-        local targetLockedSum = 0.0
+        local targetLockedSum = lockData.lockedSumByVertex[v]
         local curLockedSum = 0.0
 
-        for lp in lockedPairs do targetLockedSum += lp[2]
         for cp in curPairs do (
             for lp in lockedPairs where cp[1] == lp[1] do curLockedSum += cp[2]
         )
@@ -133,16 +141,22 @@ fn swl_EnforceLocks skinMod lockData vertsToProcess:undefined = (
             )
         )
 
-        -- 只有权重明显变化时才回写，避免自动模式持续刷新
+        -- 只有权重明显变化时才回写，比较时按 boneID 匹配，避免顺序差异导致误写
         local needWrite = false
         if outBoneIDs.count != curPairs.count then (
             needWrite = true
         ) else (
             for i = 1 to outBoneIDs.count while (not needWrite) do (
-                if outBoneIDs[i] != curPairs[i][1] then (
+                local curWeight = undefined
+                for cp in curPairs where cp[1] == outBoneIDs[i] do (
+                    curWeight = cp[2]
+                    exit
+                )
+
+                if curWeight == undefined then (
                     needWrite = true
                 ) else (
-                    if (abs (outWeights[i] - curPairs[i][2])) > eps do needWrite = true
+                    if (abs (outWeights[i] - curWeight)) > eps do needWrite = true
                 )
             )
         )
@@ -261,7 +275,7 @@ fn SWL_ShowUI = (
 
     swl_StopTimer()
     local timer = dotNetObject "System.Windows.Forms.Timer"
-    timer.Interval = 800
+    timer.Interval = 1200
     dotNet.addEventHandler timer "Tick" (fn onTick s e = (
         if SWL_State == undefined then return()
         if SWL_State.enabled != true then return()
