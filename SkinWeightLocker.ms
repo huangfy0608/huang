@@ -68,7 +68,8 @@ fn swl_CreateLockData skinMod boneIDs = (
     local vertCount = skinOps.GetNumberVertices skinMod
     local arr = for v = 1 to vertCount collect #()
     local lockedSums = for v = 1 to vertCount collect 0.0
-    local affected = bitArray vertCount
+    local affected = #{}
+    affected.count = vertCount
 
     for v = 1 to vertCount do (
         local wc = skinOps.GetVertexWeightCount skinMod v
