@@ -32,7 +32,6 @@ struct SWL_StateStruct (
     listBoneIDs = #(),
     lockedBoneIDs = #(),
     lockData,
-    lockDataDirty = false,
     timer,
     enabled = false
 )
@@ -119,8 +118,6 @@ fn swl_GetCheckedBoneIDsFromUI clb skinMod = (
 )
 
 fn swl_CreateLockData skinMod boneIDs = (
-    if not swl_EnsureSkinContext skinMod then return SWL_VertexLockData weightsByBoneID:#() lockedSumByVertex:#() affectedVerts:#{}
-
     local vertCount = skinOps.GetNumberVertices skinMod
     local arr = for v = 1 to vertCount collect #()
     local lockedSums = for v = 1 to vertCount collect 0.0
@@ -145,7 +142,6 @@ fn swl_CreateLockData skinMod boneIDs = (
 
 fn swl_EnforceLocks skinMod lockData vertsToProcess:undefined = (
     if lockData == undefined then return false
-    if not swl_EnsureSkinContext skinMod then return false
 
     local vertCount = skinOps.GetNumberVertices skinMod
     local eps = 0.0001
@@ -232,7 +228,7 @@ fn swl_EnforceLocksSelected skinMod lockData = (
     if selectedVerts != undefined and selectedVerts.numberSet > 0 then (
         swl_EnforceLocks skinMod lockData vertsToProcess:selectedVerts
     ) else (
-        false
+        swl_EnforceLocks skinMod lockData
     )
 )
 
@@ -264,11 +260,10 @@ rollout SWL_UI "Skin Weight Locker" width:300 height:360
 
         if ids.count == 0 then (
             SWL_State.lockData = undefined
-            SWL_State.lockDataDirty = false
             SWL_State.enabled = false
         ) else (
-            -- 勾选时仅标记脏数据，避免立即全量重算导致界面刷新/打断编辑
-            SWL_State.lockDataDirty = true
+            -- 勾选后即时更新锁定快照，保证退出/进入编辑状态后锁定依然有效
+            SWL_State.lockData = swl_CreateLockData SWL_State.skinMod ids
             SWL_State.enabled = cbAuto.checked
         )
 
@@ -319,7 +314,7 @@ rollout SWL_UI "Skin Weight Locker" width:300 height:360
             return()
         )
 
-        SWL_State = SWL_StateStruct node:obj skinMod:s listBoneIDs:#() lockedBoneIDs:#() lockData:undefined lockDataDirty:false enabled:cbAuto.checked
+        SWL_State = SWL_StateStruct node:obj skinMod:s listBoneIDs:#() lockedBoneIDs:#() lockData:undefined enabled:cbAuto.checked
         swl_EnsureSkinContext s
         rebuildBoneList restoreChecks:false
         refreshStatus()
@@ -342,30 +337,14 @@ rollout SWL_UI "Skin Weight Locker" width:300 height:360
 
             SWL_State.lockedBoneIDs = #()
             SWL_State.lockData = undefined
-            SWL_State.lockDataDirty = false
             SWL_State.enabled = false
         )
         refreshStatus()
     )
 
     on btApply pressed do (
-        if SWL_State == undefined or SWL_State.skinMod == undefined then (
-            messageBox "请先点击“设置当前目标模型”。"
-            return()
-        )
-
-        if SWL_State.lockedBoneIDs.count == 0 then (
-            messageBox "请先在骨骼列表中勾选要锁定的骨骼。"
-            return()
-        )
-
-        if SWL_State.lockDataDirty or SWL_State.lockData == undefined then (
-            SWL_State.lockData = swl_CreateLockData SWL_State.skinMod SWL_State.lockedBoneIDs
-            SWL_State.lockDataDirty = false
-        )
-
-        if SWL_State.lockData == undefined then (
-            messageBox "当前无法生成锁定数据，请在 Skin 编辑状态下重试。"
+        if SWL_State == undefined or SWL_State.skinMod == undefined or SWL_State.lockData == undefined then (
+            messageBox "请先设置目标并勾选要锁定的骨骼。"
             return()
         )
 
@@ -398,17 +377,11 @@ fn SWL_ShowUI = (
     dotNet.addEventHandler timer "Tick" (fn onTick s e = (
         if SWL_State == undefined then return()
         if SWL_State.enabled != true then return()
-        if SWL_State.skinMod == undefined then return()
-        if SWL_State.lockedBoneIDs.count == 0 then return()
+        if SWL_State.skinMod == undefined or SWL_State.lockData == undefined then return()
         if not swl_IsSafeAutoContext SWL_State.skinMod then return()
 
         try(
-            if SWL_State.lockDataDirty or SWL_State.lockData == undefined then (
-                SWL_State.lockData = swl_CreateLockData SWL_State.skinMod SWL_State.lockedBoneIDs
-                SWL_State.lockDataDirty = false
-            )
-
-            if SWL_State.lockData != undefined do swl_EnforceLocksSelected SWL_State.skinMod SWL_State.lockData
+            swl_EnforceLocksSelected SWL_State.skinMod SWL_State.lockData
         )catch()
     ))
     timer.Start()
