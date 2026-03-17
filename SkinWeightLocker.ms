@@ -12,6 +12,7 @@ global swl_GetBoneIDByNode
 global swl_GetCurrentSelectedBoneIDs
 global swl_CreateLockData
 global swl_EnforceLocks
+global swl_EnforceLocksSelected
 global SWL_UI
 global SWL_ShowUI
 
@@ -79,12 +80,17 @@ fn swl_CreateLockData skinMod boneIDs = (
     SWL_VertexLockData weightsByBoneID:arr
 )
 
-fn swl_EnforceLocks skinMod lockData = (
+fn swl_EnforceLocks skinMod lockData vertsToProcess:undefined = (
     if lockData == undefined then return false
 
     local vertCount = skinOps.GetNumberVertices skinMod
+    local eps = 0.0001
+
+    local processAll = (vertsToProcess == undefined)
 
     for v = 1 to vertCount do (
+        if (not processAll) and (vertsToProcess[v] != true) do continue
+
         local lockedPairs = lockData.weightsByBoneID[v]
         if lockedPairs.count == 0 do continue
 
@@ -127,10 +133,36 @@ fn swl_EnforceLocks skinMod lockData = (
             )
         )
 
-        if outBoneIDs.count > 0 do skinOps.ReplaceVertexWeights skinMod v outBoneIDs outWeights
+        -- 只有权重明显变化时才回写，避免自动模式持续刷新
+        local needWrite = false
+        if outBoneIDs.count != curPairs.count then (
+            needWrite = true
+        ) else (
+            for i = 1 to outBoneIDs.count while (not needWrite) do (
+                if outBoneIDs[i] != curPairs[i][1] then (
+                    needWrite = true
+                ) else (
+                    if (abs (outWeights[i] - curPairs[i][2])) > eps do needWrite = true
+                )
+            )
+        )
+
+        if needWrite and outBoneIDs.count > 0 do skinOps.ReplaceVertexWeights skinMod v outBoneIDs outWeights
     )
 
     true
+)
+
+fn swl_EnforceLocksSelected skinMod lockData = (
+    local selectedVerts = undefined
+    try(selectedVerts = skinOps.GetSelectedVertices skinMod)catch(selectedVerts = undefined)
+
+    if selectedVerts != undefined and selectedVerts.numberSet > 0 then (
+        swl_EnforceLocks skinMod lockData vertsToProcess:selectedVerts
+    ) else (
+        -- 若当前无顶点选择，回退为全量检查（仍带“仅变化时回写”保护）
+        swl_EnforceLocks skinMod lockData
+    )
 )
 
 fn swl_StopTimer = (
@@ -229,12 +261,12 @@ fn SWL_ShowUI = (
 
     swl_StopTimer()
     local timer = dotNetObject "System.Windows.Forms.Timer"
-    timer.Interval = 250
+    timer.Interval = 800
     dotNet.addEventHandler timer "Tick" (fn onTick s e = (
         if SWL_State == undefined then return()
         if SWL_State.enabled != true then return()
         if SWL_State.skinMod == undefined or SWL_State.lockData == undefined then return()
-        swl_EnforceLocks SWL_State.skinMod SWL_State.lockData
+        swl_EnforceLocksSelected SWL_State.skinMod SWL_State.lockData
     ))
     timer.Start()
 
