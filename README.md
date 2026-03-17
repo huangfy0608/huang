@@ -13,7 +13,7 @@
 ## 安装
 
 1. 将 `SkinWeightLocker.ms` 拷贝到 3ds Max 脚本目录（例如 `scripts/startup`），重启 3ds Max；
-2. 或者通过 `Scripting > Run Script...` 手动运行。
+2. 或者通过 `Scripting > Run Script...` 手动运行（脚本会立即弹出操作 UI）。
 
 运行后可在 `Customize > Customize User Interface` 中找到：
 
