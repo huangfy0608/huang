@@ -23,8 +23,9 @@ global swl_IsSafeAutoContext
 struct SWL_VertexLockData (
     lockedBoneIDs,      -- 被锁定的骨骼 ID 列表
     lockedWeightsByVertex, -- 每顶点对应 lockedBoneIDs 的快照权重数组
+    lockMaskByVertex,       -- 每顶点每锁定骨骼是否锁定（与 lockedWeightsByVertex 对齐）
     lockedSumByVertex,
-    affectedVerts -- bitarray: 仅包含被锁骨骼影响的顶点（锁定和>0）
+    affectedVerts -- bitarray: 需要参与约束的顶点（采用全顶点，保证0权重锁定也能被保护）
 )
 
 struct SWL_StateStruct (
@@ -121,14 +122,15 @@ fn swl_GetCheckedBoneIDsFromUI clb skinMod = (
 fn swl_CreateLockData skinMod boneIDs = (
     local vertCount = skinOps.GetNumberVertices skinMod
     local lockedWeightsByVertex = for v = 1 to vertCount collect #()
+    local lockMaskByVertex = for v = 1 to vertCount collect #()
     local lockedSums = for v = 1 to vertCount collect 0.0
     local affected = #{}
     affected.count = vertCount
-    local eps = 0.0001
 
     for v = 1 to vertCount do (
         local wc = skinOps.GetVertexWeightCount skinMod v
         local row = #()
+        local rowMask = #()
 
         for bID in boneIDs do (
             local wt = 0.0
@@ -137,14 +139,16 @@ fn swl_CreateLockData skinMod boneIDs = (
             )
 
             append row wt
+            append rowMask true -- 当前实现为“所选骨骼全顶点锁定”，对应 Maya 的 influence lock 逻辑
             lockedSums[v] += wt
         )
 
         lockedWeightsByVertex[v] = row
-        if lockedSums[v] > eps do affected[v] = true
+        lockMaskByVertex[v] = rowMask
+        affected[v] = true
     )
 
-    SWL_VertexLockData lockedBoneIDs:boneIDs lockedWeightsByVertex:lockedWeightsByVertex lockedSumByVertex:lockedSums affectedVerts:affected
+    SWL_VertexLockData lockedBoneIDs:boneIDs lockedWeightsByVertex:lockedWeightsByVertex lockMaskByVertex:lockMaskByVertex lockedSumByVertex:lockedSums affectedVerts:affected
 )
 
 fn swl_EnforceLocks skinMod lockData vertsToProcess:undefined = (
@@ -182,11 +186,14 @@ fn swl_EnforceLocks skinMod lockData vertsToProcess:undefined = (
         local outWeights = #()
 
         -- 先写锁定骨骼权重（Maya 类似行为：锁定影响权重保持快照）
+        local lockMaskRow = lockData.lockMaskByVertex[v]
         for i = 1 to lockedIDs.count do (
-            local wt = lockedRow[i]
-            if wt > eps do (
-                append outBoneIDs lockedIDs[i]
-                append outWeights wt
+            if lockMaskRow[i] == true do (
+                local wt = lockedRow[i]
+                if wt > eps do (
+                    append outBoneIDs lockedIDs[i]
+                    append outWeights wt
+                )
             )
         )
 
