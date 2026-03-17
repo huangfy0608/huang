@@ -25,7 +25,7 @@ struct SWL_VertexLockData (
     lockedWeightsByVertex, -- 每顶点对应 lockedBoneIDs 的快照权重数组
     lockMaskByVertex,       -- 每顶点每锁定骨骼是否锁定（与 lockedWeightsByVertex 对齐）
     lockedSumByVertex,
-    affectedVerts -- bitarray: 需要参与约束的顶点（采用全顶点，保证0权重锁定也能被保护）
+    affectedVerts -- bitarray: 仅包含锁定骨骼实际有权重的顶点
 )
 
 struct SWL_StateStruct (
@@ -139,13 +139,13 @@ fn swl_CreateLockData skinMod boneIDs = (
             )
 
             append row wt
-            append rowMask true -- 当前实现为“所选骨骼全顶点锁定”，对应 Maya 的 influence lock 逻辑
+            append rowMask (wt > 0.0001)
             lockedSums[v] += wt
         )
 
         lockedWeightsByVertex[v] = row
         lockMaskByVertex[v] = rowMask
-        affected[v] = true
+        if lockedSums[v] > 0.0001 do affected[v] = true
     )
 
     SWL_VertexLockData lockedBoneIDs:boneIDs lockedWeightsByVertex:lockedWeightsByVertex lockMaskByVertex:lockMaskByVertex lockedSumByVertex:lockedSums affectedVerts:affected
