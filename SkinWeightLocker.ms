@@ -21,9 +21,10 @@ global swl_EnsureSkinContext
 global swl_IsSafeAutoContext
 
 struct SWL_VertexLockData (
-    weightsByBoneID, -- #( #(boneID, weight), ... ) per vertex index (1-based)
+    lockedBoneIDs,      -- 被锁定的骨骼 ID 列表
+    lockedWeightsByVertex, -- 每顶点对应 lockedBoneIDs 的快照权重数组
     lockedSumByVertex,
-    affectedVerts -- bitarray: 仅包含被锁骨骼影响的顶点
+    affectedVerts -- bitarray: 仅包含被锁骨骼影响的顶点（锁定和>0）
 )
 
 struct SWL_StateStruct (
@@ -119,33 +120,39 @@ fn swl_GetCheckedBoneIDsFromUI clb skinMod = (
 
 fn swl_CreateLockData skinMod boneIDs = (
     local vertCount = skinOps.GetNumberVertices skinMod
-    local arr = for v = 1 to vertCount collect #()
+    local lockedWeightsByVertex = for v = 1 to vertCount collect #()
     local lockedSums = for v = 1 to vertCount collect 0.0
     local affected = #{}
     affected.count = vertCount
+    local eps = 0.0001
 
     for v = 1 to vertCount do (
         local wc = skinOps.GetVertexWeightCount skinMod v
-        for w = 1 to wc do (
-            local bID = skinOps.GetVertexWeightBoneID skinMod v w
-            if (findItem boneIDs bID) > 0 do (
-                local wt = skinOps.GetVertexWeight skinMod v w
-                append arr[v] #(bID, wt)
-                lockedSums[v] += wt
-                affected[v] = true
+        local row = #()
+
+        for bID in boneIDs do (
+            local wt = 0.0
+            for w = 1 to wc while wt == 0.0 do (
+                if (skinOps.GetVertexWeightBoneID skinMod v w) == bID do wt = skinOps.GetVertexWeight skinMod v w
             )
+
+            append row wt
+            lockedSums[v] += wt
         )
+
+        lockedWeightsByVertex[v] = row
+        if lockedSums[v] > eps do affected[v] = true
     )
 
-    SWL_VertexLockData weightsByBoneID:arr lockedSumByVertex:lockedSums affectedVerts:affected
+    SWL_VertexLockData lockedBoneIDs:boneIDs lockedWeightsByVertex:lockedWeightsByVertex lockedSumByVertex:lockedSums affectedVerts:affected
 )
 
 fn swl_EnforceLocks skinMod lockData vertsToProcess:undefined = (
     if lockData == undefined then return false
 
-    local vertCount = skinOps.GetNumberVertices skinMod
     local eps = 0.0001
     local vertsMask = undefined
+    local lockedIDs = lockData.lockedBoneIDs
 
     if vertsToProcess == undefined then (
         vertsMask = lockData.affectedVerts
@@ -154,21 +161,17 @@ fn swl_EnforceLocks skinMod lockData vertsToProcess:undefined = (
     )
 
     for v in vertsMask do (
-        local lockedPairs = lockData.weightsByBoneID[v]
-        if lockedPairs.count == 0 do continue
-
         local wc = skinOps.GetVertexWeightCount skinMod v
         local curPairs = #() -- #( #(boneID, weight), ... )
         for w = 1 to wc do (
             append curPairs #(skinOps.GetVertexWeightBoneID skinMod v w, skinOps.GetVertexWeight skinMod v w)
         )
 
+        local lockedRow = lockData.lockedWeightsByVertex[v]
         local targetLockedSum = lockData.lockedSumByVertex[v]
         local curLockedSum = 0.0
 
-        for cp in curPairs do (
-            for lp in lockedPairs where cp[1] == lp[1] do curLockedSum += cp[2]
-        )
+        for cp in curPairs where (findItem lockedIDs cp[1]) > 0 do curLockedSum += cp[2]
 
         local unlockedCurSum = 1.0 - curLockedSum
         local unlockedTargetSum = 1.0 - targetLockedSum
@@ -178,24 +181,22 @@ fn swl_EnforceLocks skinMod lockData vertsToProcess:undefined = (
         local outBoneIDs = #()
         local outWeights = #()
 
-        -- 先写锁定骨骼权重（使用快照值）
-        for lp in lockedPairs do (
-            append outBoneIDs lp[1]
-            append outWeights lp[2]
-        )
-
-        -- 其它骨骼按比例缩放，保留其相对分布
-        for cp in curPairs do (
-            local isLocked = false
-            for lp in lockedPairs where cp[1] == lp[1] do isLocked = true
-
-            if not isLocked do (
-                append outBoneIDs cp[1]
-                append outWeights (cp[2] * scale)
+        -- 先写锁定骨骼权重（Maya 类似行为：锁定影响权重保持快照）
+        for i = 1 to lockedIDs.count do (
+            local wt = lockedRow[i]
+            if wt > eps do (
+                append outBoneIDs lockedIDs[i]
+                append outWeights wt
             )
         )
 
-        -- 只有权重明显变化时才回写，比较时按 boneID 匹配，避免顺序差异导致误写
+        -- 其它骨骼按比例缩放，保留其相对分布
+        for cp in curPairs where (findItem lockedIDs cp[1]) == 0 do (
+            append outBoneIDs cp[1]
+            append outWeights (cp[2] * scale)
+        )
+
+        -- 只有权重明显变化时才回写，比较时按 boneID 匹配
         local needWrite = false
         if outBoneIDs.count != curPairs.count then (
             needWrite = true
